@@ -1,57 +1,77 @@
+import streamlit as st
 import requests
 import pandas as pd
+from datetime import datetime
 
-# Delta Exchange API URL for products
-BASE_URL = "https://api.delta.exchange/v2/products"
+BASE_URL = "https://api.delta.exchange"
 
-# Target strike price
-TARGET_STRIKE = "128400"
+def get_all_contracts():
+    """Fetch all option contracts from Delta Exchange."""
+    url = f"{BASE_URL}/v2/products"
+    r = requests.get(url)
+    r.raise_for_status()
+    data = r.json()["result"]
+    return [c for c in data if c["contract_type"] == "call_option" or c["contract_type"] == "put_option"]
 
-# Fetch all products
-resp = requests.get(BASE_URL)
-data = resp.json()
+def get_nearest_expiry_contracts():
+    """Get nearest expiry BTC options contracts."""
+    contracts = get_all_contracts()
+    # Filter only BTC options
+    btc_contracts = [c for c in contracts if c["underlying_asset"]["symbol"] == "BTC"]
+    
+    # Find the nearest expiry date
+    expiries = sorted(set(c["settlement_time"] for c in btc_contracts))
+    nearest_expiry = expiries[0]
 
-if not data.get("success", False):
-    raise Exception("Failed to fetch products")
+    nearest_contracts = [c for c in btc_contracts if c["settlement_time"] == nearest_expiry]
+    return nearest_contracts, nearest_expiry
 
-results = data["result"]
+def fetch_orderbook(product_id):
+    """Fetch orderbook for a product."""
+    url = f"{BASE_URL}/v2/l2orderbook/{product_id}"
+    r = requests.get(url)
+    r.raise_for_status()
+    data = r.json()["result"]
+    bid = float(data["buy_book"][0]["price"]) if data["buy_book"] else None
+    ask = float(data["sell_book"][0]["price"]) if data["sell_book"] else None
+    return bid, ask
 
-# Filter for BTC options with the target strike
-target_options = [
-    p for p in results
-    if p["underlying_asset_symbol"] == "BTC"
-    and p.get("strike_price") == TARGET_STRIKE
-    and "option_type" in p
-]
+def build_option_chain():
+    contracts, expiry = get_nearest_expiry_contracts()
+    strikes = sorted(set(c["strike_price"] for c in contracts))
 
-if not target_options:
-    raise Exception(f"No options found for strike {TARGET_STRIKE}")
+    rows = []
+    for strike in strikes:
+        call = next((c for c in contracts if c["strike_price"] == strike and c["contract_type"] == "call_option"), None)
+        put = next((c for c in contracts if c["strike_price"] == strike and c["contract_type"] == "put_option"), None)
 
-rows = []
+        call_bid, call_ask = fetch_orderbook(call["id"]) if call else (None, None)
+        put_bid, put_ask = fetch_orderbook(put["id"]) if put else (None, None)
 
-for opt in target_options:
-    opt_type = "Call" if opt["option_type"] == "call" else "Put"
-    quotes = opt.get("quotes", {})
+        rows.append({
+            "Call Bid": call_bid,
+            "Call Ask": call_ask,
+            "Call Mark": call["mark_price"] if call else None,
+            "Call OI": call["open_interest"] if call else None,
+            "Call Delta": call["greeks"]["delta"] if call else None,
+            "Call IV": call["greeks"]["iv"] if call else None,
+            "Strike": strike,
+            "Put Bid": put_bid,
+            "Put Ask": put_ask,
+            "Put Mark": put["mark_price"] if put else None,
+            "Put OI": put["open_interest"] if put else None,
+            "Put Delta": put["greeks"]["delta"] if put else None,
+            "Put IV": put["greeks"]["iv"] if put else None,
+        })
 
-    bid = float(quotes.get("best_bid", 0)) if quotes.get("best_bid") else None
-    ask = float(quotes.get("best_ask", 0)) if quotes.get("best_ask") else None
-    mark = float(opt.get("mark_price", 0)) if opt.get("mark_price") else None
-    mid = (bid + ask) / 2 if bid is not None and ask is not None else None
+    df = pd.DataFrame(rows)
+    return df, expiry
 
-    rows.append({
-        "Option Type": opt_type,
-        "Bid": bid,
-        "Ask": ask,
-        "Mark": mark,
-        "Mid": mid
-    })
+# ---- Streamlit UI ----
+st.set_page_config(page_title="BTC Option Chain", layout="wide")
+st.title("BTC Options Chain - Nearest Expiry")
 
-# Convert to DataFrame
-df = pd.DataFrame(rows)
+df, expiry = build_option_chain()
+st.subheader(f"Nearest Expiry: {expiry} (UTC)")
 
-print(df)
-
-# If using Streamlit, uncomment:
-# import streamlit as st
-# st.title(f"BTC Options Data for Strike {TARGET_STRIKE}")
-# st.table(df)
+st.dataframe(df.style.format(precision=2))
