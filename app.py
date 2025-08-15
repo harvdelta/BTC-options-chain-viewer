@@ -1,18 +1,19 @@
 import streamlit as st
 import requests
-import pandas as pd
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+import pytz
 
 BASE_URL = "https://api.delta.exchange"
 
+# ---------- Fetch Nearest Expiry ----------
 def get_nearest_expiry():
     url = f"{BASE_URL}/v2/products"
     data = requests.get(url).json()
 
     if not data.get("success") or "result" not in data:
-        return None
+        return None, None
 
-    # Filter only BTC options
+    # Filter BTC options only
     btc_options = [
         p for p in data["result"]
         if p.get("contract_type") in ["call_options", "put_options"]
@@ -21,53 +22,64 @@ def get_nearest_expiry():
     ]
 
     if not btc_options:
-        return None
+        return None, None
 
-    # Sort by settlement time
+    # Sort by settlement date
     btc_options.sort(key=lambda x: x["settlement_time"])
-    return btc_options[0]["settlement_time"]
+    nearest = btc_options[0]
 
-def fetch_options_chain(expiry):
+    # Expiry code like BTC-16AUG25
+    expiry_code = "-".join(nearest["symbol"].split("-")[:2])
+    expiry_date = nearest["settlement_time"]
+    return expiry_date, expiry_code
+
+# ---------- Fetch Options Chain ----------
+def fetch_options_chain(expiry_code):
     url = f"{BASE_URL}/v2/tickers"
     data = requests.get(url).json()
     if not data.get("success") or "result" not in data:
         return []
-    chain = [p for p in data["result"] if expiry in p["symbol"]]
-    return chain
 
-def utc_to_ist(utc_time_str):
-    try:
-        utc_dt = datetime.fromisoformat(utc_time_str.replace("Z", "+00:00"))
-        ist_dt = utc_dt + timedelta(hours=5, minutes=30)
-        return ist_dt.strftime('%d %b %Y, %I:%M %p IST')
-    except Exception:
-        return utc_time_str
+    return [p for p in data["result"] if expiry_code in p["symbol"]]
 
-st.set_page_config(page_title="BTC Options Chain Viewer", page_icon="📊", layout="wide")
+# ---------- Convert UTC to IST ----------
+def utc_to_ist(utc_str):
+    utc_dt = datetime.strptime(utc_str, "%Y-%m-%dT%H:%M:%SZ")
+    utc_dt = utc_dt.replace(tzinfo=pytz.utc)
+    ist_dt = utc_dt.astimezone(pytz.timezone("Asia/Kolkata"))
+    return ist_dt.strftime("%d %b %Y, %I:%M %p IST")
+
+# ---------- Streamlit App ----------
+st.set_page_config(page_title="BTC Options Chain Viewer", layout="wide")
 st.title("📊 BTC Options Chain Viewer")
 
-expiry = get_nearest_expiry()
-if not expiry:
+expiry_date, expiry_code = get_nearest_expiry()
+
+if not expiry_code:
     st.error("Could not fetch nearest expiry.")
-    st.stop()
+else:
+    st.markdown(f"**Nearest Expiry Date:** {utc_to_ist(expiry_date)}")
+    chain = fetch_options_chain(expiry_code)
 
-expiry_display = utc_to_ist(expiry)
-st.write(f"**Nearest Expiry Date:** {expiry_display}")
+    if not chain:
+        st.warning("No options data found for this expiry.")
+    else:
+        # Separate Calls & Puts
+        calls = [c for c in chain if c["contract_type"] == "call_options"]
+        puts = [p for p in chain if p["contract_type"] == "put_options"]
 
-chain = fetch_options_chain(expiry)
-if not chain:
-    st.warning("No options data found for this expiry.")
-    st.stop()
+        # Sort by strike price
+        calls.sort(key=lambda x: x["strike_price"])
+        puts.sort(key=lambda x: x["strike_price"])
 
-df = pd.DataFrame(chain)
-df["strike"] = df["symbol"].str.extract(r"(\d+)").astype(float)
-df["type"] = df["symbol"].str.extract(r"-(C|P)$")
-df["mark_display"] = df["mark_price"]
+        # Build Data Table
+        import pandas as pd
+        strikes = sorted(set([c["strike_price"] for c in calls] + [p["strike_price"] for p in puts]))
+        table = []
+        for strike in strikes:
+            call_mark = next((c["mark_price"] for c in calls if c["strike_price"] == strike), None)
+            put_mark = next((p["mark_price"] for p in puts if p["strike_price"] == strike), None)
+            table.append({"Call Mark Price": call_mark, "Strike": strike, "Put Mark Price": put_mark})
 
-calls = df[df["type"] == "C"][["strike", "mark_display"]].rename(columns={"mark_display": "Calls (Mark)"})
-puts = df[df["type"] == "P"][["strike", "mark_display"]].rename(columns={"mark_display": "Puts (Mark)"})
-
-table = pd.merge(calls, puts, on="strike", how="outer").sort_values("strike")
-table = table.set_index("strike")
-
-st.dataframe(table)
+        df = pd.DataFrame(table)
+        st.dataframe(df, use_container_width=True)
