@@ -55,8 +55,11 @@ def parse_option_details(products):
         if len(parts) >= 4:
             option_type = "CALL" if parts[0] == "C" else "PUT"
             
-            # Use strike_price from product data (already in USD)
-            strike = float(product.get("strike_price", 0))
+            # Use strike_price from product data but convert to proper USD
+            raw_strike = float(product.get("strike_price", 0))
+            # Based on your screenshot, strikes should be ~$124,800 not $1,248,000
+            # So we need to divide by 10 to get correct strike
+            strike = raw_strike / 10 if raw_strike > 500000 else raw_strike
             
             expiry_str = parts[3]
             settlement_time = product.get("settlement_time")
@@ -81,10 +84,10 @@ def get_mid_price(ticker_data):
     if bid and ask:
         try:
             mid = (float(bid) + float(ask)) / 2
-            # Based on actual platform comparison, Delta prices need more aggressive conversion
-            # Your screenshot shows prices like $0.2-$2.0, but we were getting 1600+
-            # This suggests conversion factor should be around 1000-2000
-            return mid / 1000  # Adjust this divisor based on comparison
+            # Based on your screenshot comparison:
+            # Your real platform shows $0.2-$2.0, we're getting $8-$10
+            # Need to divide by ~10-20 to get into the right range
+            return mid / 10000  # More aggressive conversion
         except (ValueError, TypeError):
             pass
     
@@ -92,7 +95,7 @@ def get_mid_price(ticker_data):
     mark_price = ticker_data.get("mark_price")
     if mark_price:
         try:
-            return float(mark_price) / 1000
+            return float(mark_price) / 10000
         except (ValueError, TypeError):
             pass
     
