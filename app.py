@@ -12,17 +12,18 @@ def get_nearest_expiry():
     if not data.get("success") or "result" not in data:
         return None
 
-    # Filter for BTC options (calls & puts)
     options = []
     for p in data["result"]:
-        if p.get("contract_type") in ["call", "put"] and p.get("symbol", "").startswith("BTC"):
-            if "settlement_time" in p:
-                options.append(p)
+        symbol = p.get("symbol", "")
+        expiry_time = p.get("settlement_time")
+        # Only BTC options with C or P at the end
+        if symbol.startswith("BTC-") and (symbol.endswith("-C") or symbol.endswith("-P")) and expiry_time:
+            options.append(expiry_time)
 
     if not options:
         return None
 
-    expiries = sorted(set([p["settlement_time"] for p in options]))
+    expiries = sorted(set(options))
     return expiries[0] if expiries else None
 
 def fetch_options_chain(expiry):
