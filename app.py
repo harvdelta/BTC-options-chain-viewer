@@ -109,11 +109,14 @@ def fetch_options_data(api_key, api_secret, base_url):
         for ticker in tickers_response['result']:
             ticker_data[ticker.get('symbol')] = ticker
     
-    # Filter options contracts
+    # Filter BTC options contracts only
     options = []
     for product in products:
         contract_type = product.get('contract_type', '')
-        if contract_type in ['call_options', 'put_options']:
+        underlying_symbol = product.get('underlying_asset', {}).get('symbol', '')
+        
+        # Only include BTC options
+        if contract_type in ['call_options', 'put_options'] and underlying_symbol == 'BTC':
             # Merge ticker data if available
             symbol = product.get('symbol')
             if symbol in ticker_data:
@@ -123,7 +126,7 @@ def fetch_options_data(api_key, api_secret, base_url):
     if not options:
         return None, None, None
     
-    # Group by underlying asset and find nearest expiry
+    # Group by underlying asset and find nearest expiry (BTC only now)
     underlying_groups = {}
     for option in options:
         underlying = option.get('underlying_asset', {}).get('symbol', 'Unknown')
@@ -131,17 +134,18 @@ def fetch_options_data(api_key, api_secret, base_url):
             underlying_groups[underlying] = []
         underlying_groups[underlying].append(option)
     
-    # Find nearest expiry for each underlying
+    # Find nearest expiry for BTC
     nearest_expiry_options = {}
     for underlying, opts in underlying_groups.items():
-        # Sort by settlement time to find nearest expiry
-        sorted_opts = sorted(opts, key=lambda x: x.get('settlement_time', '9999-12-31T23:59:59Z'))
-        if sorted_opts:
-            nearest_expiry = sorted_opts[0].get('settlement_time')
-            nearest_expiry_options[underlying] = [
-                opt for opt in sorted_opts 
-                if opt.get('settlement_time') == nearest_expiry
-            ]
+        if underlying == 'BTC':  # Only process BTC
+            # Sort by settlement time to find nearest expiry
+            sorted_opts = sorted(opts, key=lambda x: x.get('settlement_time', '9999-12-31T23:59:59Z'))
+            if sorted_opts:
+                nearest_expiry = sorted_opts[0].get('settlement_time')
+                nearest_expiry_options[underlying] = [
+                    opt for opt in sorted_opts 
+                    if opt.get('settlement_time') == nearest_expiry
+                ]
     
     return options, underlying_groups, nearest_expiry_options
 
@@ -181,12 +185,8 @@ def create_options_chain_table(options_data, underlying):
             'Strike': strike,
             'Call_Symbol': call_data.get('symbol', '') if call_data else '',
             'Call_Price': call_data.get('mark_price', 0) if call_data else 0,
-            'Call_Volume': call_data.get('turnover_24h', 0) if call_data else 0,
-            'Call_OI': call_data.get('open_interest', 0) if call_data else 0,
             'Put_Symbol': put_data.get('symbol', '') if put_data else '',
             'Put_Price': put_data.get('mark_price', 0) if put_data else 0,
-            'Put_Volume': put_data.get('turnover_24h', 0) if put_data else 0,
-            'Put_OI': put_data.get('open_interest', 0) if put_data else 0,
         }
         chain_data.append(row)
     
@@ -197,67 +197,57 @@ def create_options_visualizations(df, underlying):
     if df is None or df.empty or not PLOTLY_AVAILABLE:
         return None, None
     
-    # Options Chain Visualization
-    fig1 = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=('Call Prices', 'Put Prices', 'Call Open Interest', 'Put Open Interest'),
-        specs=[[{"secondary_y": False}, {"secondary_y": False}],
-               [{"secondary_y": False}, {"secondary_y": False}]]
-    )
+    # Options Price Comparison
+    fig1 = go.Figure()
     
     # Call and Put Prices
-    fig1.add_trace(
-        go.Scatter(x=df['Strike'], y=df['Call_Price'], name='Call Price', line=dict(color='green')),
-        row=1, col=1
-    )
+    fig1.add_trace(go.Scatter(
+        x=df['Strike'], 
+        y=df['Call_Price'], 
+        name='Call Price', 
+        line=dict(color='green', width=3),
+        mode='lines+markers'
+    ))
     
-    fig1.add_trace(
-        go.Scatter(x=df['Strike'], y=df['Put_Price'], name='Put Price', line=dict(color='red')),
-        row=1, col=2
-    )
-    
-    # Open Interest
-    fig1.add_trace(
-        go.Bar(x=df['Strike'], y=df['Call_OI'], name='Call OI', marker_color='lightgreen'),
-        row=2, col=1
-    )
-    
-    fig1.add_trace(
-        go.Bar(x=df['Strike'], y=df['Put_OI'], name='Put OI', marker_color='lightcoral'),
-        row=2, col=2
-    )
+    fig1.add_trace(go.Scatter(
+        x=df['Strike'], 
+        y=df['Put_Price'], 
+        name='Put Price', 
+        line=dict(color='red', width=3),
+        mode='lines+markers'
+    ))
     
     fig1.update_layout(
-        title=f'{underlying} Options Chain Analysis',
-        height=600,
-        showlegend=True
-    )
-    
-    # Volume Analysis
-    fig2 = go.Figure()
-    fig2.add_trace(go.Bar(
-        x=df['Strike'],
-        y=df['Call_Volume'],
-        name='Call Volume',
-        marker_color='green',
-        opacity=0.7
-    ))
-    
-    fig2.add_trace(go.Bar(
-        x=df['Strike'],
-        y=df['Put_Volume'],
-        name='Put Volume',
-        marker_color='red',
-        opacity=0.7
-    ))
-    
-    fig2.update_layout(
-        title=f'{underlying} Options Volume by Strike',
+        title=f'{underlying} Options Prices by Strike',
         xaxis_title='Strike Price',
-        yaxis_title='24h Volume',
-        barmode='group',
-        height=400
+        yaxis_title='Option Price (USD)',
+        height=500,
+        showlegend=True,
+        hovermode='x unified'
     )
+    
+    # Price spread analysis
+    df_clean = df[(df['Call_Price'] > 0) & (df['Put_Price'] > 0)].copy()
+    if not df_clean.empty:
+        df_clean['Call_Put_Spread'] = df_clean['Call_Price'] - df_clean['Put_Price']
+        
+        fig2 = go.Figure()
+        fig2.add_trace(go.Bar(
+            x=df_clean['Strike'],
+            y=df_clean['Call_Put_Spread'],
+            name='Call-Put Spread',
+            marker_color=['green' if x > 0 else 'red' for x in df_clean['Call_Put_Spread']],
+            opacity=0.7
+        ))
+        
+        fig2.update_layout(
+            title=f'{underlying} Call-Put Price Spread',
+            xaxis_title='Strike Price',
+            yaxis_title='Price Difference (Call - Put)',
+            height=400
+        )
+    else:
+        fig2 = None
     
     return fig1, fig2
 
@@ -266,7 +256,7 @@ def create_basic_charts(df, underlying):
     if df is None or df.empty:
         return
     
-    st.subheader("Options Price Analysis")
+    st.subheader("BTC Options Price Analysis")
     
     col1, col2 = st.columns(2)
     
@@ -279,23 +269,10 @@ def create_basic_charts(df, underlying):
         st.write("**Put Prices**")
         price_df = df[['Strike', 'Put_Price']].set_index('Strike')
         st.line_chart(price_df)
-    
-    st.subheader("Open Interest Analysis")
-    
-    col3, col4 = st.columns(2)
-    
-    with col3:
-        st.write("**Call Open Interest**")
-        oi_df = df[['Strike', 'Call_OI']].set_index('Strike')
-        st.bar_chart(oi_df)
-    
-    with col4:
-        st.write("**Put Open Interest**")
-        oi_df = df[['Strike', 'Put_OI']].set_index('Strike')
-        st.bar_chart(oi_df)
 
 def main():
-    st.title("📊 Delta Exchange Options Chain")
+    st.title("₿ BTC Options Chain Viewer")
+    st.markdown("**Delta Exchange India - Bitcoin Options**")
     st.markdown("---")
     
     # Sidebar for configuration
@@ -324,28 +301,18 @@ def main():
         """)
         st.stop()
     
-    # Fetch data
-    with st.spinner("Fetching options data from Delta Exchange India..."):
+    # Fetch BTC options data
+    with st.spinner("Fetching BTC options data from Delta Exchange India..."):
         all_options, underlying_groups, nearest_expiry_options = fetch_options_data(api_key, api_secret, base_url)
     
-    if not nearest_expiry_options:
-        st.error("No options data available or API request failed.")
+    if not nearest_expiry_options or 'BTC' not in nearest_expiry_options:
+        st.error("No BTC options data available or API request failed.")
+        st.info("Make sure BTC options are available on Delta Exchange India.")
         st.stop()
     
-    # Sidebar - Select underlying asset
-    available_underlyings = list(nearest_expiry_options.keys())
-    selected_underlying = st.sidebar.selectbox(
-        "Select Underlying Asset:",
-        available_underlyings,
-        index=0 if available_underlyings else None
-    )
-    
-    if not selected_underlying:
-        st.warning("No underlying assets available.")
-        st.stop()
-    
-    # Display options chain
-    st.subheader(f"Options Chain for {selected_underlying}")
+    # Display BTC options chain
+    selected_underlying = 'BTC'  # Fixed to BTC only
+    st.subheader(f"Options Chain for Bitcoin (BTC)")
     
     # Get expiry date
     if nearest_expiry_options[selected_underlying]:
@@ -369,19 +336,19 @@ def main():
             st.metric("Total Strikes", len(chain_df))
         
         with col2:
-            total_call_oi = chain_df['Call_OI'].sum()
-            st.metric("Total Call OI", f"{total_call_oi:,.0f}")
+            active_calls = len(chain_df[chain_df['Call_Price'] > 0])
+            st.metric("Active Calls", active_calls)
         
         with col3:
-            total_put_oi = chain_df['Put_OI'].sum()
-            st.metric("Total Put OI", f"{total_put_oi:,.0f}")
+            active_puts = len(chain_df[chain_df['Put_Price'] > 0])
+            st.metric("Active Puts", active_puts)
         
         with col4:
-            total_volume = chain_df['Call_Volume'].sum() + chain_df['Put_Volume'].sum()
-            st.metric("Total Volume (24h)", f"{total_volume:,.0f}")
+            avg_call_price = chain_df[chain_df['Call_Price'] > 0]['Call_Price'].mean()
+            st.metric("Avg Call Price", f"${avg_call_price:.2f}" if not pd.isna(avg_call_price) else "N/A")
         
-        # Display the options chain table
-        st.subheader("Options Chain Data")
+        # Display the BTC options chain table
+        st.subheader("BTC Options Chain Data")
         
         # Format the dataframe for better display
         display_df = chain_df.copy()
@@ -392,18 +359,16 @@ def main():
             display_df,
             use_container_width=True,
             column_config={
-                "Strike": st.column_config.NumberColumn("Strike Price", format="%.2f"),
-                "Call_Price": st.column_config.NumberColumn("Call Price", format="%.4f"),
-                "Put_Price": st.column_config.NumberColumn("Put Price", format="%.4f"),
-                "Call_Volume": st.column_config.NumberColumn("Call Volume", format="%.0f"),
-                "Put_Volume": st.column_config.NumberColumn("Put Volume", format="%.0f"),
-                "Call_OI": st.column_config.NumberColumn("Call OI", format="%.0f"),
-                "Put_OI": st.column_config.NumberColumn("Put OI", format="%.0f"),
+                "Strike": st.column_config.NumberColumn("Strike Price ($)", format="%.0f"),
+                "Call_Symbol": st.column_config.TextColumn("Call Symbol", width="medium"),
+                "Call_Price": st.column_config.NumberColumn("Call Price ($)", format="%.4f"),
+                "Put_Symbol": st.column_config.TextColumn("Put Symbol", width="medium"),
+                "Put_Price": st.column_config.NumberColumn("Put Price ($)", format="%.4f"),
             }
         )
         
         # Create visualizations
-        st.subheader("Options Analysis")
+        st.subheader("BTC Options Analysis")
         
         if PLOTLY_AVAILABLE:
             fig1, fig2 = create_options_visualizations(chain_df, selected_underlying)
@@ -425,32 +390,43 @@ def main():
             st.write("**Call Options Summary:**")
             call_stats = {
                 "Active Strikes": len(chain_df[chain_df['Call_Price'] > 0]),
-                "Avg Call Price": chain_df[chain_df['Call_Price'] > 0]['Call_Price'].mean(),
-                "Max Call OI Strike": chain_df.loc[chain_df['Call_OI'].idxmax(), 'Strike'] if not chain_df.empty else 0,
-                "Total Call Volume": chain_df['Call_Volume'].sum()
+                "Avg Call Price": f"${chain_df[chain_df['Call_Price'] > 0]['Call_Price'].mean():.4f}" if len(chain_df[chain_df['Call_Price'] > 0]) > 0 else "N/A",
+                "Highest Call Price": f"${chain_df['Call_Price'].max():.4f}" if chain_df['Call_Price'].max() > 0 else "N/A",
+                "Lowest Strike (ITM)": f"${chain_df[chain_df['Call_Price'] > 0]['Strike'].min():.0f}" if len(chain_df[chain_df['Call_Price'] > 0]) > 0 else "N/A"
             }
             for key, value in call_stats.items():
-                if isinstance(value, float):
-                    st.write(f"- {key}: {value:.4f}")
-                else:
-                    st.write(f"- {key}: {value}")
+                st.write(f"- {key}: {value}")
         
         with col2:
             st.write("**Put Options Summary:**")
             put_stats = {
                 "Active Strikes": len(chain_df[chain_df['Put_Price'] > 0]),
-                "Avg Put Price": chain_df[chain_df['Put_Price'] > 0]['Put_Price'].mean(),
-                "Max Put OI Strike": chain_df.loc[chain_df['Put_OI'].idxmax(), 'Strike'] if not chain_df.empty else 0,
-                "Total Put Volume": chain_df['Put_Volume'].sum()
+                "Avg Put Price": f"${chain_df[chain_df['Put_Price'] > 0]['Put_Price'].mean():.4f}" if len(chain_df[chain_df['Put_Price'] > 0]) > 0 else "N/A",
+                "Highest Put Price": f"${chain_df['Put_Price'].max():.4f}" if chain_df['Put_Price'].max() > 0 else "N/A",
+                "Highest Strike (ITM)": f"${chain_df[chain_df['Put_Price'] > 0]['Strike'].max():.0f}" if len(chain_df[chain_df['Put_Price'] > 0]) > 0 else "N/A"
             }
             for key, value in put_stats.items():
-                if isinstance(value, float):
-                    st.write(f"- {key}: {value:.4f}")
-                else:
-                    st.write(f"- {key}: {value}")
+                st.write(f"- {key}: {value}")
     
     else:
-        st.warning(f"No options data available for {selected_underlying}")
+        st.warning(f"No BTC options data available for nearest expiry")
+        
+        # Show what underlyings are available
+        if underlying_groups:
+            available_underlyings = list(underlying_groups.keys())
+            st.info(f"Available underlying assets: {', '.join(available_underlyings)}")
+    
+    # Sidebar information
+    st.sidebar.header("📊 BTC Options Info")
+    st.sidebar.info("""
+    This dashboard shows Bitcoin (BTC) options with the nearest expiry date from Delta Exchange India.
+    
+    **Features:**
+    - Real-time option prices
+    - Call and Put options side by side
+    - Strike price analysis
+    - Price spread visualization
+    """)
     
     # Refresh button
     if st.sidebar.button("🔄 Refresh Data"):
@@ -462,7 +438,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: #666;'>
-            <p>Delta Exchange Options Chain Dashboard | Data refreshes every 5 minutes</p>
+            <p>BTC Options Chain Dashboard | Delta Exchange India | Data refreshes every 5 minutes</p>
         </div>
         """,
         unsafe_allow_html=True
