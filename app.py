@@ -1,90 +1,106 @@
 import streamlit as st
-import requests
-import pandas as pd
+import aiohttp
+import asyncio
 from datetime import datetime
+import pytz
 
-BASE_URL = "https://api.delta.exchange"
+DELTA_BASE_URL = "https://api.delta.exchange"
 
-# -------- Get Nearest Expiry Code --------
-def get_nearest_expiry_code():
-    url = f"{BASE_URL}/v2/tickers"
-    r = requests.get(url).json()
+# ------------------------
+# Fetch nearest expiry
+# ------------------------
+async def get_nearest_expiry():
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{DELTA_BASE_URL}/v2/products") as resp:
+            data = await resp.json()
 
-    if not r.get("success") or "result" not in r:
-        return None, []
+    options = [p for p in data["result"] if p["product_type"] == "options" and p["underlying_asset"]["symbol"] == "BTC"]
+    expiries = sorted(list(set([p["settlement_time"] for p in options])))
 
-    # Filter BTC options only
-    options = [t for t in r["result"] if t["symbol"].startswith(("C-BTC", "P-BTC"))]
+    if not expiries:
+        return None, None
 
-    if not options:
-        return None, []
+    nearest_expiry = expiries[0]
+    expiry_datetime = datetime.fromisoformat(nearest_expiry.replace("Z", "+00:00")).astimezone(pytz.timezone("Asia/Kolkata"))
 
-    # Extract expiry code (last part of symbol, DDMMYY)
-    for t in options:
-        t["expiry_code"] = t["symbol"].split("-")[-1]
+    nearest_expiry_products = [p for p in options if p["settlement_time"] == nearest_expiry]
 
-    # Pick the earliest expiry
-    unique_expiries = sorted(set(t["expiry_code"] for t in options))
-    nearest_expiry = unique_expiries[0]
+    return expiry_datetime, nearest_expiry_products
 
-    return nearest_expiry, options
+# ------------------------
+# Fetch mid price for a given symbol
+# ------------------------
+async def fetch_mid_price(session, symbol):
+    try:
+        async with session.get(f"{DELTA_BASE_URL}/v2/l2orderbook/{symbol}") as resp:
+            data = await resp.json()
+            bids = data["result"]["buy_levels"]
+            asks = data["result"]["sell_levels"]
 
-# -------- Get Options Chain for Expiry --------
-def get_options_chain(expiry_code, all_options):
-    # Filter only nearest expiry
-    nearest = [t for t in all_options if t["expiry_code"] == expiry_code]
+            if not bids or not asks:
+                return symbol, None
 
-    # Separate Calls and Puts
-    calls = [t for t in nearest if t["symbol"].startswith("C-BTC")]
-    puts = [t for t in nearest if t["symbol"].startswith("P-BTC")]
+            best_bid = float(bids[0]["price"])
+            best_ask = float(asks[0]["price"])
+            mid_price = round((best_bid + best_ask) / 2, 2)
 
-    # Extract strike price (3rd part of symbol)
-    for c in calls:
-        c["strike"] = int(c["symbol"].split("-")[2])
-    for p in puts:
-        p["strike"] = int(p["symbol"].split("-")[2])
+            return symbol, mid_price
+    except Exception:
+        return symbol, None
 
-    # Sort by strike
-    calls.sort(key=lambda x: x["strike"])
-    puts.sort(key=lambda x: x["strike"])
+# ------------------------
+# Main async data fetcher
+# ------------------------
+async def fetch_all_mid_prices(products):
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_mid_price(session, p["symbol"]) for p in products]
+        results = await asyncio.gather(*tasks)
+        return dict(results)
 
-    # Build table
-    strikes = sorted(set([c["strike"] for c in calls] + [p["strike"] for p in puts]))
+# ------------------------
+# Build table for Streamlit
+# ------------------------
+def build_options_chain(products, prices):
+    calls = {}
+    puts = {}
 
+    for p in products:
+        strike = p["strike_price"]
+        symbol = p["symbol"]
+        mid_price = prices.get(symbol, None)
+
+        if p["option_type"] == "call":
+            calls[strike] = mid_price
+        elif p["option_type"] == "put":
+            puts[strike] = mid_price
+
+    strikes = sorted(set(calls.keys()) | set(puts.keys()))
     table = []
+
     for strike in strikes:
-        call_mark = next((c["mark_price"] for c in calls if c["strike"] == strike), None)
-        put_mark = next((p["mark_price"] for p in puts if p["strike"] == strike), None)
         table.append({
-            "Call Mark Price": call_mark,
+            "Call Mid": calls.get(strike, None),
             "Strike": strike,
-            "Put Mark Price": put_mark
+            "Put Mid": puts.get(strike, None)
         })
 
-    return pd.DataFrame(table)
+    return table
 
-# -------- Convert Expiry Code to Date --------
-def expiry_code_to_date(code):
-    try:
-        dt = datetime.strptime(code, "%d%m%y")
-        return dt.strftime("%d %b %Y")
-    except:
-        return code
-
-# -------- Streamlit UI --------
+# ------------------------
+# Streamlit App
+# ------------------------
 st.set_page_config(page_title="BTC Options Chain Viewer", layout="wide")
+
 st.title("📊 BTC Options Chain Viewer")
 
-expiry_code, all_options = get_nearest_expiry_code()
+expiry_datetime, products = asyncio.run(get_nearest_expiry())
 
-if not expiry_code:
-    st.error("Could not fetch options data.")
+if not products:
+    st.error("No options data found.")
 else:
-    expiry_date_str = expiry_code_to_date(expiry_code)
-    st.markdown(f"**Nearest Expiry Date:** {expiry_date_str}")
+    st.subheader(f"Nearest Expiry Date: {expiry_datetime.strftime('%d %b %Y, %I:%M %p IST')}")
 
-    df = get_options_chain(expiry_code, all_options)
-    if df.empty:
-        st.warning("No options data found for this expiry.")
-    else:
-        st.dataframe(df, use_container_width=True)
+    prices = asyncio.run(fetch_all_mid_prices(products))
+    table = build_options_chain(products, prices)
+
+    st.table(table)
