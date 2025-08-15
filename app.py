@@ -6,9 +6,16 @@ import hmac
 import time
 import json
 from datetime import datetime, timedelta
-import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+
+# Try to import plotly, fallback to basic charts if not available
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    st.warning("Plotly not available. Install with: pip install plotly")
 
 # Page configuration
 st.set_page_config(
@@ -171,7 +178,7 @@ def create_options_chain_table(options_data, underlying):
 
 def create_options_visualizations(df, underlying):
     """Create visualizations for options data"""
-    if df is None or df.empty:
+    if df is None or df.empty or not PLOTLY_AVAILABLE:
         return None, None
     
     # Options Chain Visualization
@@ -237,6 +244,39 @@ def create_options_visualizations(df, underlying):
     )
     
     return fig1, fig2
+
+def create_basic_charts(df, underlying):
+    """Create basic charts using Streamlit's built-in charting when Plotly is not available"""
+    if df is None or df.empty:
+        return
+    
+    st.subheader("Options Price Analysis")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Call Prices**")
+        price_df = df[['Strike', 'Call_Price']].set_index('Strike')
+        st.line_chart(price_df)
+    
+    with col2:
+        st.write("**Put Prices**")
+        price_df = df[['Strike', 'Put_Price']].set_index('Strike')
+        st.line_chart(price_df)
+    
+    st.subheader("Open Interest Analysis")
+    
+    col3, col4 = st.columns(2)
+    
+    with col3:
+        st.write("**Call Open Interest**")
+        oi_df = df[['Strike', 'Call_OI']].set_index('Strike')
+        st.bar_chart(oi_df)
+    
+    with col4:
+        st.write("**Put Open Interest**")
+        oi_df = df[['Strike', 'Put_OI']].set_index('Strike')
+        st.bar_chart(oi_df)
 
 def main():
     st.title("📊 Delta Exchange Options Chain")
@@ -347,13 +387,16 @@ def main():
         # Create visualizations
         st.subheader("Options Analysis")
         
-        fig1, fig2 = create_options_visualizations(chain_df, selected_underlying)
-        
-        if fig1:
-            st.plotly_chart(fig1, use_container_width=True)
-        
-        if fig2:
-            st.plotly_chart(fig2, use_container_width=True)
+        if PLOTLY_AVAILABLE:
+            fig1, fig2 = create_options_visualizations(chain_df, selected_underlying)
+            
+            if fig1:
+                st.plotly_chart(fig1, use_container_width=True)
+            
+            if fig2:
+                st.plotly_chart(fig2, use_container_width=True)
+        else:
+            create_basic_charts(chain_df, selected_underlying)
         
         # Additional analysis
         st.subheader("Key Statistics")
