@@ -5,14 +5,13 @@ import time, hmac, hashlib
 from datetime import datetime
 from urllib.parse import urlencode
 
-BASE_URL = "https://api.delta.exchange"
-
-# Load API keys from secrets
+# Load config from secrets
+BASE_URL = st.secrets.get("DELTA_BASE_URL", "https://api.delta.exchange")
 API_KEY = st.secrets["DELTA_API_KEY"]
 API_SECRET = st.secrets["DELTA_API_SECRET"]
 
+# -------- AUTH SIGNATURE --------
 def sign_request(method, path, params=None):
-    """Generate signed headers for Delta Exchange private API."""
     ts = str(int(time.time()))
     query = urlencode(params) if params else ""
     sig_payload = f"{method.upper()}{ts}/{path}"
@@ -27,34 +26,67 @@ def sign_request(method, path, params=None):
     }
     return headers
 
-def get_all_contracts():
-    """Fetch all option contracts (authenticated request)."""
+# -------- API CALLS --------
+def get_all_contracts(auth=True):
+    """Fetch all option contracts. If auth fails, fallback to public."""
     path = "v2/products"
     url = f"{BASE_URL}/{path}"
-    headers = sign_request("GET", path)
-    r = requests.get(url, headers=headers)
-    r.raise_for_status()
-    data = r.json()["result"]
-    return [c for c in data if c["contract_type"] in ["call_option", "put_option"]]
+
+    try:
+        headers = sign_request("GET", path) if auth else {}
+        r = requests.get(url, headers=headers)
+        r.raise_for_status()
+        data = r.json().get("result", [])
+        contracts = [c for c in data if c["contract_type"] in ["call_option", "put_option"]]
+        if contracts:
+            return contracts
+        elif auth:
+            # Retry with public access if auth returned empty
+            return get_all_contracts(auth=False)
+        else:
+            return []
+    except Exception as e:
+        if auth:
+            return get_all_contracts(auth=False)
+        return []
 
 def get_nearest_expiry_contracts():
     contracts = get_all_contracts()
+
+    if not contracts:
+        st.error("❌ No option contracts found. Check API keys or endpoint.")
+        st.stop()
+
     btc_contracts = [c for c in contracts if c["underlying_asset"]["symbol"] == "BTC"]
+
+    if not btc_contracts:
+        st.error("❌ No BTC options found in API response.")
+        st.stop()
+
     expiries = sorted(set(c["settlement_time"] for c in btc_contracts))
+    if not expiries:
+        st.error("❌ No expiry dates available for BTC options.")
+        st.stop()
+
     nearest_expiry = expiries[0]
     nearest_contracts = [c for c in btc_contracts if c["settlement_time"] == nearest_expiry]
     return nearest_contracts, nearest_expiry
 
-def fetch_orderbook(product_id):
+def fetch_orderbook(product_id, auth=True):
     path = f"v2/l2orderbook/{product_id}"
     url = f"{BASE_URL}/{path}"
-    headers = sign_request("GET", path)
-    r = requests.get(url, headers=headers)
-    r.raise_for_status()
-    data = r.json()["result"]
-    bid = float(data["buy_book"][0]["price"]) if data["buy_book"] else None
-    ask = float(data["sell_book"][0]["price"]) if data["sell_book"] else None
-    return bid, ask
+    try:
+        headers = sign_request("GET", path) if auth else {}
+        r = requests.get(url, headers=headers)
+        r.raise_for_status()
+        data = r.json()["result"]
+        bid = float(data["buy_book"][0]["price"]) if data["buy_book"] else None
+        ask = float(data["sell_book"][0]["price"]) if data["sell_book"] else None
+        return bid, ask
+    except:
+        if auth:
+            return fetch_orderbook(product_id, auth=False)
+        return None, None
 
 def build_option_chain():
     contracts, expiry = get_nearest_expiry_contracts()
@@ -71,14 +103,14 @@ def build_option_chain():
         rows.append({
             "Call Bid": call_bid,
             "Call Ask": call_ask,
-            "Call Mark": call["mark_price"] if call else None,
+            "Call Mark": float(call["mark_price"]) if call else None,
             "Call OI": call["open_interest"] if call else None,
             "Call Delta": call["greeks"]["delta"] if call else None,
             "Call IV": call["greeks"]["iv"] if call else None,
             "Strike": strike,
             "Put Bid": put_bid,
             "Put Ask": put_ask,
-            "Put Mark": put["mark_price"] if put else None,
+            "Put Mark": float(put["mark_price"]) if put else None,
             "Put OI": put["open_interest"] if put else None,
             "Put Delta": put["greeks"]["delta"] if put else None,
             "Put IV": put["greeks"]["iv"] if put else None,
@@ -87,9 +119,9 @@ def build_option_chain():
     df = pd.DataFrame(rows)
     return df, expiry
 
-# ---- Streamlit UI ----
+# -------- STREAMLIT UI --------
 st.set_page_config(page_title="BTC Option Chain", layout="wide")
-st.title("BTC Options Chain - Nearest Expiry")
+st.title("📈 BTC Options Chain - Nearest Expiry")
 
 df, expiry = build_option_chain()
 st.subheader(f"Nearest Expiry: {expiry} (UTC)")
