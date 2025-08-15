@@ -7,180 +7,175 @@ import json
 # ======================
 BASE_URL = "https://api.delta.exchange/v2"
 
-st.set_page_config(page_title="🔍 Raw API Values Check", layout="wide")
-st.title("🔍 Raw API Values for 128000 Strike")
+st.set_page_config(page_title="🎯 128400 Strike Data", layout="wide")
+st.title("🎯 Raw Data for 128400 Strike Only")
 
-# Step 1: Get all products
-st.subheader("Step 1: Fetching Products...")
+# Step 1: Find the exact symbol for 128400 strike
+st.subheader("Step 1: Finding 128400 Strike Symbol...")
 
 try:
     products_response = requests.get(f"{BASE_URL}/products", timeout=10)
     products_response.raise_for_status()
-    products_data = products_response.json()
-    products = products_data.get("result", [])
+    products = products_response.json().get("result", [])
     
-    st.success(f"✅ Fetched {len(products)} products")
-    
-    # Filter for BTC options near 128000 strike
-    target_options = []
+    # Find 128400 strike options
+    target_symbols = []
     for product in products:
         symbol = product.get("symbol", "")
         if symbol.startswith(("C-BTC", "P-BTC")):
-            strike_price = product.get("strike_price")
-            if strike_price:
-                try:
-                    strike_num = float(strike_price)
-                    # Look for strikes around 128000 (allow some variation)
-                    if 127000 <= strike_num <= 129000 or 1270000 <= strike_num <= 1290000 or 12700 <= strike_num <= 12900:
-                        target_options.append(product)
-                except ValueError:
-                    pass
+            strike_price = str(product.get("strike_price", ""))
+            if "128400" in strike_price:
+                target_symbols.append({
+                    "symbol": symbol,
+                    "strike_price": product.get("strike_price"),
+                    "product_id": product.get("id"),
+                    "product": product
+                })
     
-    st.write(f"Found {len(target_options)} options near 128000 strike:")
-    
-    if target_options:
-        for i, option in enumerate(target_options[:5]):  # Show first 5
-            st.write(f"**Option {i+1}:**")
-            st.json({
-                "symbol": option.get("symbol"),
-                "strike_price": option.get("strike_price"),
-                "strike_price_type": type(option.get("strike_price")).__name__,
-                "raw_strike_value": repr(option.get("strike_price")),
-            })
+    if target_symbols:
+        st.success(f"✅ Found {len(target_symbols)} options with 128400 strike:")
+        for item in target_symbols:
+            st.write(f"- **{item['symbol']}** (Strike: {item['strike_price']})")
     else:
-        st.warning("No options found near 128000. Let's see what strikes are available:")
-        
-        # Show all BTC option strikes
-        btc_strikes = []
+        st.error("❌ No 128400 strike found. Let's see available strikes...")
+        # Show some strikes for reference
+        strikes = []
         for product in products:
             symbol = product.get("symbol", "")
             if symbol.startswith(("C-BTC", "P-BTC")):
-                strike = product.get("strike_price")
-                if strike:
-                    btc_strikes.append(float(strike))
-        
-        if btc_strikes:
-            btc_strikes = sorted(set(btc_strikes))
-            st.write("**All BTC Option Strikes:**")
-            for i, strike in enumerate(btc_strikes[:20]):  # Show first 20
-                st.write(f"{i+1}. {strike}")
-            if len(btc_strikes) > 20:
-                st.write(f"... and {len(btc_strikes) - 20} more strikes")
+                strikes.append(product.get("strike_price"))
+        strikes = sorted(set(strikes))[:10]
+        st.write(f"Available strikes (first 10): {strikes}")
+        st.stop()
 
 except requests.exceptions.RequestException as e:
-    st.error(f"❌ Error fetching products: {e}")
+    st.error(f"❌ Error: {e}")
     st.stop()
 
-# Step 2: Get ticker data for the target option
-st.subheader("Step 2: Fetching Ticker Data...")
+# Step 2: Get ticker data for 128400 strike options
+st.subheader("Step 2: Raw Ticker Data for 128400 Strike")
 
-if target_options:
-    # Use the first target option
-    selected_option = target_options[0]
-    symbol = selected_option["symbol"]
+for item in target_symbols:
+    symbol = item["symbol"]
+    st.write(f"\n**📊 Analyzing: {symbol}**")
     
-    st.write(f"**Analyzing symbol: {symbol}**")
-    
-    # Method 1: Get from bulk tickers
-    st.write("**Method 1: Bulk Tickers API**")
+    # Get ticker data
     try:
-        tickers_response = requests.get(f"{BASE_URL}/tickers", timeout=10)
-        tickers_response.raise_for_status()
-        tickers_data = tickers_response.json()
-        all_tickers = tickers_data.get("result", [])
+        ticker_response = requests.get(f"{BASE_URL}/tickers/{symbol}", timeout=10)
+        ticker_response.raise_for_status()
+        ticker_data = ticker_response.json().get("result", {})
         
-        # Find our symbol
-        target_ticker = None
-        for ticker in all_tickers:
-            if ticker.get("symbol") == symbol:
-                target_ticker = ticker
-                break
-        
-        if target_ticker:
-            st.success("✅ Found ticker in bulk data")
-            st.write("**Raw Ticker Data:**")
-            st.json({
-                "symbol": target_ticker.get("symbol"),
-                "quotes": target_ticker.get("quotes", {}),
-                "mark_price": target_ticker.get("mark_price"),
-                "mark_price_type": type(target_ticker.get("mark_price")).__name__,
-                "underlying_asset": target_ticker.get("underlying_asset"),
-                "full_ticker": target_ticker  # Show everything
-            })
+        if ticker_data:
+            # Extract key values
+            quotes = ticker_data.get("quotes", {})
+            
+            raw_data = {
+                "Symbol": symbol,
+                "Best Bid": quotes.get("best_bid"),
+                "Best Ask": quotes.get("best_ask"),
+                "Mark Price": ticker_data.get("mark_price"),
+                "Open Interest": ticker_data.get("open_interest", "N/A"),
+                "Volume": ticker_data.get("volume", "N/A"),
+                "Delta": ticker_data.get("greeks", {}).get("delta", "N/A"),
+                "Gamma": ticker_data.get("greeks", {}).get("gamma", "N/A"),
+                "Theta": ticker_data.get("greeks", {}).get("theta", "N/A"),
+                "Vega": ticker_data.get("greeks", {}).get("vega", "N/A"),
+                "IV": quotes.get("mark_iv", "N/A")
+            }
+            
+            # Display in a clean table
+            st.write("**🔍 Raw Values from API:**")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**💰 Pricing Data:**")
+                st.write(f"- **Best Bid**: `{raw_data['Best Bid']}`")
+                st.write(f"- **Best Ask**: `{raw_data['Best Ask']}`")
+                st.write(f"- **Mark Price**: `{raw_data['Mark Price']}`")
+                
+                # Calculate mid if bid/ask available
+                if raw_data['Best Bid'] and raw_data['Best Ask']:
+                    try:
+                        bid_val = float(raw_data['Best Bid'])
+                        ask_val = float(raw_data['Best Ask'])
+                        mid_val = (bid_val + ask_val) / 2
+                        st.write(f"- **Mid Price**: `{mid_val}`")
+                        st.write(f"- **Mid ÷ 10**: `{mid_val / 10:.2f}`")
+                        st.write(f"- **Mid ÷ 100**: `{mid_val / 100:.4f}`")
+                        st.write(f"- **Mid ÷ 1000**: `{mid_val / 1000:.6f}`")
+                        st.write(f"- **Mid ÷ 10000**: `{mid_val / 10000:.6f}`")
+                    except (ValueError, TypeError):
+                        st.write("- **Mid Price**: Could not calculate")
+            
+            with col2:
+                st.write("**📈 Greeks & Other:**")
+                st.write(f"- **Open Interest**: `{raw_data['Open Interest']}`")
+                st.write(f"- **Volume**: `{raw_data['Volume']}`")
+                st.write(f"- **Delta**: `{raw_data['Delta']}`")
+                st.write(f"- **IV**: `{raw_data['IV']}`")
+            
+            # Show complete raw JSON
+            if st.checkbox(f"Show complete raw JSON for {symbol}"):
+                st.json(ticker_data)
+                
         else:
-            st.warning("❌ Symbol not found in bulk ticker data")
+            st.error(f"❌ No ticker data for {symbol}")
             
     except requests.exceptions.RequestException as e:
-        st.error(f"❌ Error fetching bulk tickers: {e}")
-    
-    # Method 2: Get individual ticker
-    st.write("**Method 2: Individual Ticker API**")
+        st.error(f"❌ Error fetching {symbol}: {e}")
+
+# Step 3: Quick conversion test
+st.subheader("Step 3: Quick Conversion Test")
+
+expected_price = st.number_input("What should the option price be? (e.g., 0.50)", value=0.50, step=0.01)
+
+if target_symbols and expected_price > 0:
+    symbol = target_symbols[0]["symbol"]  # Use first symbol
     try:
-        individual_response = requests.get(f"{BASE_URL}/tickers/{symbol}", timeout=10)
-        individual_response.raise_for_status()
-        individual_data = individual_response.json()
-        individual_ticker = individual_data.get("result", {})
+        ticker_response = requests.get(f"{BASE_URL}/tickers/{symbol}", timeout=10)
+        ticker_data = ticker_response.json().get("result", {})
+        quotes = ticker_data.get("quotes", {})
         
-        if individual_ticker:
-            st.success("✅ Found individual ticker data")
-            st.write("**Raw Individual Ticker Data:**")
-            st.json(individual_ticker)
-        else:
-            st.warning("❌ No individual ticker data")
+        if quotes.get("best_bid") and quotes.get("best_ask"):
+            bid = float(quotes["best_bid"])
+            ask = float(quotes["best_ask"])
+            mid = (bid + ask) / 2
             
-    except requests.exceptions.RequestException as e:
-        st.error(f"❌ Error fetching individual ticker: {e}")
-    
-    # Method 3: Try orderbook
-    st.write("**Method 3: Order Book API**")
+            needed_divisor = mid / expected_price
+            
+            st.success(f"🎯 **SOLUTION FOUND!**")
+            st.write(f"- Raw Mid Price: `{mid}`")
+            st.write(f"- Expected Price: `${expected_price}`")
+            st.write(f"- **Needed Divisor: `{needed_divisor:.0f}`**")
+            st.write(f"- Test: `{mid} ÷ {needed_divisor:.0f} = ${mid/needed_divisor:.2f}`")
+            
+            st.code(f"""
+# Use this in your code:
+def get_mid_price(ticker_data):
+    quotes = ticker_data.get("quotes", {{}})
+    bid = float(quotes.get("best_bid", 0))
+    ask = float(quotes.get("best_ask", 0))
+    if bid and ask:
+        mid = (bid + ask) / 2
+        return mid / {needed_divisor:.0f}  # <-- Use this divisor
+    return None
+            """, language="python")
+            
+    except Exception as e:
+        st.error(f"Conversion test failed: {e}")
+
+# Step 4: Manual ticker lookup
+st.subheader("Step 4: Manual Symbol Lookup")
+manual_symbol = st.text_input("Enter exact symbol to test:", placeholder="C-BTC-128400-290825")
+
+if manual_symbol and st.button("Fetch Manual Symbol"):
     try:
-        orderbook_response = requests.get(f"{BASE_URL}/l2orderbook/{symbol}", timeout=10)
-        if orderbook_response.status_code == 200:
-            orderbook_data = orderbook_response.json()
-            st.success("✅ Found orderbook data")
-            st.write("**Raw Orderbook Data:**")
-            st.json(orderbook_data)
+        response = requests.get(f"{BASE_URL}/tickers/{manual_symbol}")
+        if response.status_code == 200:
+            data = response.json().get("result", {})
+            st.json(data)
         else:
-            st.warning(f"❌ Orderbook API returned {orderbook_response.status_code}")
-    except requests.exceptions.RequestException as e:
-        st.error(f"❌ Error fetching orderbook: {e}")
-    
-    # Step 3: Calculate what we're getting vs what we expect
-    st.subheader("Step 3: Current Calculation Analysis")
-    
-    if target_ticker:
-        quotes = target_ticker.get("quotes", {})
-        bid = quotes.get("best_bid")
-        ask = quotes.get("best_ask")
-        mark = target_ticker.get("mark_price")
-        
-        st.write("**What we're extracting:**")
-        st.write(f"- Raw Bid: {bid} (type: {type(bid).__name__})")
-        st.write(f"- Raw Ask: {ask} (type: {type(ask).__name__})")
-        st.write(f"- Raw Mark Price: {mark} (type: {type(mark).__name__})")
-        
-        if bid and ask:
-            try:
-                raw_mid = (float(bid) + float(ask)) / 2
-                st.write(f"- **Calculated Mid: {raw_mid}**")
-                st.write(f"- **Your Code Result: ${raw_mid / 10000:.4f}** (dividing by 10000)")
-                st.write(f"- **Expected Result: $0.50**")
-                st.write(f"- **Needed Divisor: {raw_mid / 0.5:.0f}**")
-            except (ValueError, TypeError) as e:
-                st.error(f"Error calculating mid: {e}")
-
-else:
-    st.warning("No target options found to analyze")
-
-# Step 4: Raw JSON dump for manual inspection
-st.subheader("Step 4: Raw JSON Dump")
-
-if st.checkbox("Show complete raw product data"):
-    if target_options:
-        st.write("**Complete Product Data:**")
-        st.text(json.dumps(target_options[0], indent=2))
-
-if st.checkbox("Show complete raw ticker data"):
-    if target_options and 'target_ticker' in locals() and target_ticker:
-        st.write("**Complete Ticker Data:**")
-        st.text(json.dumps(target_ticker, indent=2))
+            st.error(f"HTTP {response.status_code}: {response.text}")
+    except Exception as e:
+        st.error(f"Error: {e}")
