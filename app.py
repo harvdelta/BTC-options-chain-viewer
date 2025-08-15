@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 from datetime import datetime
 import pytz
+import pandas as pd
 
 BASE_URL = "https://api.delta.exchange"
 
@@ -13,7 +14,6 @@ def get_nearest_expiry():
     if not data.get("success") or "result" not in data:
         return None, None
 
-    # Filter BTC options only
     btc_options = [
         p for p in data["result"]
         if p.get("contract_type") in ["call_options", "put_options"]
@@ -24,12 +24,10 @@ def get_nearest_expiry():
     if not btc_options:
         return None, None
 
-    # Sort by settlement date
     btc_options.sort(key=lambda x: x["settlement_time"])
     nearest = btc_options[0]
 
-    # Expiry code like BTC-16AUG25
-    expiry_code = "-".join(nearest["symbol"].split("-")[:2])
+    expiry_code = "-".join(nearest["symbol"].split("-")[:2])  # e.g. BTC-16AUG25
     expiry_date = nearest["settlement_time"]
     return expiry_date, expiry_code
 
@@ -64,17 +62,17 @@ else:
     if not chain:
         st.warning("No options data found for this expiry.")
     else:
-        # Separate Calls & Puts
-        calls = [c for c in chain if c["contract_type"] == "call_options"]
-        puts = [p for p in chain if p["contract_type"] == "put_options"]
+        # Split into calls & puts using symbol suffix
+        calls = [c for c in chain if c["symbol"].endswith("-C")]
+        puts = [p for p in chain if p["symbol"].endswith("-P")]
 
         # Sort by strike price
         calls.sort(key=lambda x: x["strike_price"])
         puts.sort(key=lambda x: x["strike_price"])
 
-        # Build Data Table
-        import pandas as pd
         strikes = sorted(set([c["strike_price"] for c in calls] + [p["strike_price"] for p in puts]))
+
+        # Build table with Mark Prices only
         table = []
         for strike in strikes:
             call_mark = next((c["mark_price"] for c in calls if c["strike_price"] == strike), None)
