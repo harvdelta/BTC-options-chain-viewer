@@ -1,52 +1,57 @@
 import requests
-from datetime import datetime
-import pytz
+import pandas as pd
 
-# Config
-BASE_URL = "https://api.delta.exchange/v2"
-IST = pytz.timezone("Asia/Kolkata")
-TARGET_STRIKE = 128400
+# Delta Exchange API URL for products
+BASE_URL = "https://api.delta.exchange/v2/products"
 
-def fetch_products():
-    """Fetch all BTC option products."""
-    r = requests.get(f"{BASE_URL}/products")
-    r.raise_for_status()
-    products = r.json().get("result", [])
-    return [p for p in products if p.get("symbol", "").startswith(("C-BTC", "P-BTC"))]
+# Target strike price
+TARGET_STRIKE = "128400"
 
-def fetch_ticker(symbol):
-    """Fetch ticker details for given symbol."""
-    r = requests.get(f"{BASE_URL}/tickers/{symbol}")
-    r.raise_for_status()
-    return r.json().get("result", {})
+# Fetch all products
+resp = requests.get(BASE_URL)
+data = resp.json()
 
-def get_strike_data():
-    products = fetch_products()
-    target_products = [p for p in products if float(p["strike_price"]) == TARGET_STRIKE]
+if not data.get("success", False):
+    raise Exception("Failed to fetch products")
 
-    if not target_products:
-        print(f"No products found for strike {TARGET_STRIKE}")
-        return
-    
-    print(f"📅 Data Time: {datetime.now(IST).strftime('%d-%m-%Y %I:%M:%S %p IST')}")
-    
-    for prod in target_products:
-        data = fetch_ticker(prod["symbol"])
-        quotes = data.get("quotes", {})
-        
-        bid = float(quotes["best_bid"]) if quotes.get("best_bid") else None
-        ask = float(quotes["best_ask"]) if quotes.get("best_ask") else None
-        mid_price = round((bid + ask) / 2, 2) if bid and ask else None
-        
-        print(f"Symbol: {prod['symbol']}")
-        print(f" Strike: {TARGET_STRIKE}")
-        print(f" Bid Price: {bid}")
-        print(f" Ask Price: {ask}")
-        print(f" Mark Price: {data.get('mark_price')}")
-        print(f" Mid Price: {mid_price}")
-        print(f" OI (Contracts): {data.get('oi_contracts')}")
-        print(f" Delta: {data.get('greeks', {}).get('delta')}")
-        print("-" * 40)
+results = data["result"]
 
-if __name__ == "__main__":
-    get_strike_data()
+# Filter for BTC options with the target strike
+target_options = [
+    p for p in results
+    if p["underlying_asset_symbol"] == "BTC"
+    and p.get("strike_price") == TARGET_STRIKE
+    and "option_type" in p
+]
+
+if not target_options:
+    raise Exception(f"No options found for strike {TARGET_STRIKE}")
+
+rows = []
+
+for opt in target_options:
+    opt_type = "Call" if opt["option_type"] == "call" else "Put"
+    quotes = opt.get("quotes", {})
+
+    bid = float(quotes.get("best_bid", 0)) if quotes.get("best_bid") else None
+    ask = float(quotes.get("best_ask", 0)) if quotes.get("best_ask") else None
+    mark = float(opt.get("mark_price", 0)) if opt.get("mark_price") else None
+    mid = (bid + ask) / 2 if bid is not None and ask is not None else None
+
+    rows.append({
+        "Option Type": opt_type,
+        "Bid": bid,
+        "Ask": ask,
+        "Mark": mark,
+        "Mid": mid
+    })
+
+# Convert to DataFrame
+df = pd.DataFrame(rows)
+
+print(df)
+
+# If using Streamlit, uncomment:
+# import streamlit as st
+# st.title(f"BTC Options Data for Strike {TARGET_STRIKE}")
+# st.table(df)
