@@ -1,15 +1,22 @@
 import requests
 
-symbol = "P-BTC-116400-160825"  # example from your screenshot
+symbol = "P-BTC-116400-160825"  # example
 url = f"https://api.delta.exchange/v2/tickers/{symbol}"
 
 r = requests.get(url)
-data = r.json()
+print("Status Code:", r.status_code)
+
+try:
+    data = r.json()
+except Exception as e:
+    print("Error parsing JSON:", e)
+    data = {}
 
 print("Full API response:", data)
 
-if "result" in data:
-    bid = data["result"]["best_bid_price"]
-    ask = data["result"]["best_ask_price"]
-    print(f"Best Bid: {bid}")
-    print(f"Best Ask: {ask}")
+result = data.get("result", {})
+bid = result.get("best_bid_price")
+ask = result.get("best_ask_price")
+
+print(f"Best Bid: {bid}")
+print(f"Best Ask: {ask}")
