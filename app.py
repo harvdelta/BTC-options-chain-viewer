@@ -9,6 +9,10 @@ def get_nearest_expiry():
     url = f"{BASE_URL}/v2/products"
     data = requests.get(url).json()
 
+    # DEBUG: Show first few entries from API
+    st.write("🔍 API Raw Products Data (First 5 entries):")
+    st.json(data.get("result", [])[:5])
+
     if not data.get("success") or "result" not in data:
         return None
 
@@ -16,8 +20,8 @@ def get_nearest_expiry():
     for p in data["result"]:
         symbol = p.get("symbol", "")
         expiry_time = p.get("settlement_time")
-        # Only BTC options with C or P at the end
-        if symbol.startswith("BTC-") and (symbol.endswith("-C") or symbol.endswith("-P")) and expiry_time:
+        # Match BTC options by symbol pattern and settlement_time
+        if "BTC" in symbol and expiry_time:
             options.append(expiry_time)
 
     if not options:
@@ -34,8 +38,8 @@ def fetch_options_chain(expiry):
     chain = [p for p in data["result"] if expiry in p["symbol"]]
     return chain
 
-st.set_page_config(page_title="BTC Options Chain", page_icon="📊", layout="wide")
-st.title("📊 BTC Options Chain – Nearest Expiry (Mark Prices Only)")
+st.set_page_config(page_title="BTC Options Chain Debug", page_icon="📊", layout="wide")
+st.title("📊 BTC Options Chain – DEBUG MODE")
 
 expiry = get_nearest_expiry()
 if not expiry:
@@ -47,7 +51,7 @@ try:
     expiry_dt = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
     expiry_display = expiry_dt.strftime('%d %b %Y, %I:%M %p UTC')
 except ValueError:
-    expiry_display = expiry  # fallback if parsing fails
+    expiry_display = expiry
 
 st.write(f"**Nearest Expiry Date:** {expiry_display}")
 
@@ -58,18 +62,15 @@ if not chain:
 
 df = pd.DataFrame(chain)
 
-# Extract strike and type (C/P)
+# Extract strike and type
 df["strike"] = df["symbol"].str.extract(r"(\d+)").astype(float)
 df["type"] = df["symbol"].str.extract(r"-(C|P)$")
-
-# Keep only mark price
 df["mark_display"] = df["mark_price"]
 
-# Separate calls and puts
+# Split into calls and puts
 calls = df[df["type"] == "C"][["strike", "mark_display"]].rename(columns={"mark_display": "Calls (Mark)"})
 puts = df[df["type"] == "P"][["strike", "mark_display"]].rename(columns={"mark_display": "Puts (Mark)"})
 
-# Merge into single table
 table = pd.merge(calls, puts, on="strike", how="outer").sort_values("strike")
 table = table.set_index("strike")
 
