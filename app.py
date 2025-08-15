@@ -14,34 +14,39 @@ def fetch_products():
     products = r.json().get("result", [])
     return [p for p in products if p.get("symbol", "").startswith(("C-BTC", "P-BTC"))]
 
-def fetch_ticker_details(symbol):
-    """Fetch detailed data for a given option symbol."""
+def fetch_ticker(symbol):
+    """Fetch ticker details for given symbol."""
     r = requests.get(f"{BASE_URL}/tickers/{symbol}")
     r.raise_for_status()
-    data = r.json().get("result", {})
-    quotes = data.get("quotes", {})
+    return r.json().get("result", {})
 
-    return {
-        "symbol": symbol,
-        "best_bid": quotes.get("best_bid"),
-        "best_ask": quotes.get("best_ask"),
-        "mark_price": data.get("mark_price"),
-        "oi_contracts": data.get("oi_contracts"),
-        "oi_value_usd": data.get("oi_value_usd"),
-        "delta": data.get("greeks", {}).get("delta"),
-        "gamma": data.get("greeks", {}).get("gamma"),
-        "vega": data.get("greeks", {}).get("vega"),
-        "theta": data.get("greeks", {}).get("theta"),
-    }
+def get_strike_data():
+    products = fetch_products()
+    target_products = [p for p in products if float(p["strike_price"]) == TARGET_STRIKE]
 
-# Main test
-products = fetch_products()
-target_products = [p for p in products if float(p["strike_price"]) == TARGET_STRIKE]
-
-if not target_products:
-    print(f"No product found for strike {TARGET_STRIKE}")
-else:
-    print(f"Data as of: {datetime.now(IST).strftime('%d %b %Y %I:%M:%S %p IST')}")
+    if not target_products:
+        print(f"No products found for strike {TARGET_STRIKE}")
+        return
+    
+    print(f"📅 Data Time: {datetime.now(IST).strftime('%d-%m-%Y %I:%M:%S %p IST')}")
+    
     for prod in target_products:
-        details = fetch_ticker_details(prod["symbol"])
-        print(details)
+        data = fetch_ticker(prod["symbol"])
+        quotes = data.get("quotes", {})
+        
+        bid = float(quotes["best_bid"]) if quotes.get("best_bid") else None
+        ask = float(quotes["best_ask"]) if quotes.get("best_ask") else None
+        mid_price = round((bid + ask) / 2, 2) if bid and ask else None
+        
+        print(f"Symbol: {prod['symbol']}")
+        print(f" Strike: {TARGET_STRIKE}")
+        print(f" Bid Price: {bid}")
+        print(f" Ask Price: {ask}")
+        print(f" Mark Price: {data.get('mark_price')}")
+        print(f" Mid Price: {mid_price}")
+        print(f" OI (Contracts): {data.get('oi_contracts')}")
+        print(f" Delta: {data.get('greeks', {}).get('delta')}")
+        print("-" * 40)
+
+if __name__ == "__main__":
+    get_strike_data()
