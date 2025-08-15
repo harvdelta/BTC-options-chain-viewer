@@ -1,84 +1,103 @@
 import streamlit as st
 import requests
-from datetime import datetime, timezone, timedelta
 import pandas as pd
+from datetime import datetime, timedelta
 
 BASE_URL = "https://api.delta.exchange"
 
-def fetch_products():
+# ---------------- Fetch all BTC options ----------------
+def get_btc_options():
     url = f"{BASE_URL}/v2/products"
     resp = requests.get(url)
     resp.raise_for_status()
-    return resp.json()["result"]
+    data = resp.json().get("result", [])
+    
+    options = [
+        p for p in data
+        if (p["symbol"].startswith("C-BTC") or p["symbol"].startswith("P-BTC"))
+    ]
+    return options
 
-def get_nearest_expiry(products):
-    btc_options = [p for p in products if p["symbol"].startswith(("C-BTC", "P-BTC"))]
-    if not btc_options:
-        return None, None
+# ---------------- Find nearest expiry ----------------
+def get_nearest_expiry(options):
+    today = datetime.utcnow()
+    future_options = [p for p in options if datetime.fromisoformat(p["settlement_time"].replace("Z", "+00:00")) > today]
+    if not future_options:
+        return None, []
+    
+    nearest = min(
+        future_options,
+        key=lambda x: datetime.fromisoformat(x["settlement_time"].replace("Z", "+00:00"))
+    )
+    nearest_expiry = nearest["settlement_time"]
+    
+    nearest_options = [
+        p for p in future_options if p["settlement_time"] == nearest_expiry
+    ]
+    return nearest_expiry, nearest_options
 
-    # Find nearest expiry datetime
-    for p in btc_options:
-        p["expiry_dt"] = datetime.fromisoformat(p["settlement_time"].replace("Z", "+00:00"))
-
-    nearest = min(btc_options, key=lambda x: x["expiry_dt"])
-    expiry_date = nearest["expiry_dt"]
-
-    # All products with same expiry
-    same_expiry = [p for p in btc_options if p["expiry_dt"] == expiry_date]
-
-    return expiry_date, same_expiry
-
+# ---------------- Fetch mid price safely ----------------
 def fetch_orderbook(symbol):
     url = f"{BASE_URL}/v2/l2orderbook/{symbol}"
     resp = requests.get(url)
     resp.raise_for_status()
-    data = resp.json()["result"]
+    data = resp.json().get("result", {})
 
-    best_bid = data["buy_book"][0]["price"] if data["buy_book"] else None
-    best_ask = data["sell_book"][0]["price"] if data["sell_book"] else None
+    buy_book = data.get("buy_book", [])
+    sell_book = data.get("sell_book", [])
+
+    best_bid = buy_book[0]["price"] if buy_book else None
+    best_ask = sell_book[0]["price"] if sell_book else None
 
     if best_bid is not None and best_ask is not None:
         return round((best_bid + best_ask) / 2, 1)
     return None
 
-def build_options_chain(products):
-    chain = {}
-    for p in products:
-        strike = p["strike_price"]
-        mid_price = fetch_orderbook(p["symbol"])
-        if p["symbol"].startswith("C-BTC"):
-            chain.setdefault(strike, {})["call"] = mid_price
-        elif p["symbol"].startswith("P-BTC"):
-            chain.setdefault(strike, {})["put"] = mid_price
-    return chain
+# ---------------- Build options chain table ----------------
+def build_options_chain(options):
+    calls = [o for o in options if o["symbol"].startswith("C-BTC")]
+    puts = [o for o in options if o["symbol"].startswith("P-BTC")]
+    
+    # Strike price is in o["strike_price"]
+    strikes = sorted({o["strike_price"] for o in options})
+    
+    rows = []
+    for strike in strikes:
+        call_price = None
+        put_price = None
+        
+        call = next((c for c in calls if c["strike_price"] == strike), None)
+        if call:
+            call_price = fetch_orderbook(call["symbol"])
+        
+        put = next((p for p in puts if p["strike_price"] == strike), None)
+        if put:
+            put_price = fetch_orderbook(put["symbol"])
+        
+        rows.append({
+            "Call (Mid)": call_price,
+            "Strike": strike,
+            "Put (Mid)": put_price
+        })
+    
+    return pd.DataFrame(rows)
 
-# Streamlit UI
-st.set_page_config(page_title="BTC Options Chain Viewer", layout="wide")
-st.title("📊 BTC Options Chain Viewer")
+# ---------------- Streamlit UI ----------------
+st.set_page_config(page_title="BTC Options Chain", layout="wide")
+st.title("₿ BTC Options Chain Viewer")
 
-with st.spinner("Fetching BTC options data..."):
+with st.spinner("Fetching BTC options..."):
     try:
-        products = fetch_products()
-        expiry_date, nearest_products = get_nearest_expiry(products)
-        if not nearest_products:
-            st.error("No BTC options data found.")
+        all_options = get_btc_options()
+        expiry_datetime, nearest_options = get_nearest_expiry(all_options)
+        
+        if not nearest_options:
+            st.error("Could not fetch nearest expiry.")
         else:
-            ist_expiry = expiry_date.astimezone(timezone(timedelta(hours=5, minutes=30)))
-            st.markdown(f"**Nearest Expiry Date:** {ist_expiry.strftime('%d %b %Y, %I:%M %p IST')}")
-
-            chain = build_options_chain(nearest_products)
-
-            # Convert to DataFrame
-            df = pd.DataFrame.from_dict(chain, orient="index").reset_index()
-            df.columns = ["Strike", "Call (Mid)", "Put (Mid)"]
-            df = df.sort_values(by="Strike").reset_index(drop=True)
-
-            # Apply green/red style
-            def color_val(val):
-                if pd.isna(val):
-                    return ""
-                return f"color: {'green' if val >= 0 else 'red'}"
-
-            st.dataframe(df.style.format({"Call (Mid)": "{:.1f}", "Put (Mid)": "{:.1f}"}))
+            expiry_ist = datetime.fromisoformat(expiry_datetime.replace("Z", "+00:00")) + timedelta(hours=5, minutes=30)
+            st.subheader(f"Nearest Expiry: {expiry_ist.strftime('%d-%b-%Y %I:%M %p IST')}")
+            
+            df = build_options_chain(nearest_options)
+            st.dataframe(df, use_container_width=True)
     except Exception as e:
         st.error(f"Error: {e}")
