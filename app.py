@@ -50,16 +50,13 @@ def parse_option_details(products):
         if not symbol:
             continue
             
-        # Parse symbol: C-BTC-28000-29NOV24 or P-BTC-28000-29NOV24
+        # Parse symbol: C-BTC-114400-180825
         parts = symbol.split("-")
         if len(parts) >= 4:
             option_type = "CALL" if parts[0] == "C" else "PUT"
             
-            # Use strike_price from product data instead of parsing from symbol
+            # Use strike_price from product data (already in USD)
             strike = float(product.get("strike_price", 0))
-            # If strike_price is in satoshis or smaller unit, convert to USD
-            if strike > 1000000:  # If strike > 1M, likely in satoshis
-                strike = strike / 100000000  # Convert satoshis to BTC, then assume BTC price
             
             expiry_str = parts[3]
             settlement_time = product.get("settlement_time")
@@ -83,7 +80,11 @@ def get_mid_price(ticker_data):
     
     if bid and ask:
         try:
-            return (float(bid) + float(ask)) / 2
+            mid = (float(bid) + float(ask)) / 2
+            # Convert from Delta's price unit to USD
+            # Based on the data, prices appear to be in a smaller unit
+            # Typical conversion: divide by 100 (from cents to dollars)
+            return mid / 100
         except (ValueError, TypeError):
             pass
     return None
@@ -177,15 +178,15 @@ for option in nearest_options:
     
     option_data = {
         "Strike": strike,
-        "Mid Price": f"${mid_price:.4f}",  # Show more decimal places for small prices
+        "Mid Price": f"${mid_price:.2f}",
         "Mid Price (num)": mid_price,  # For sorting
         "Symbol": symbol
     }
     
     if option_type == "CALL":
-        calls_data.append({**option_data, "Call Mid": f"${mid_price:.4f}"})
+        calls_data.append({**option_data, "Call Mid": f"${mid_price:.2f}"})
     else:
-        puts_data.append({**option_data, "Put Mid": f"${mid_price:.4f}"})
+        puts_data.append({**option_data, "Put Mid": f"${mid_price:.2f}"})
 
 # Create and display the options chain
 if calls_data or puts_data:
@@ -222,7 +223,7 @@ if calls_data or puts_data:
         column_config={
             "Strike": st.column_config.NumberColumn(
                 "Strike Price",
-                format="$%.2f"
+                format="$%.0f"
             ),
             "Call Mid": st.column_config.TextColumn("Call Mid Price"),
             "Put Mid": st.column_config.TextColumn("Put Mid Price"),
