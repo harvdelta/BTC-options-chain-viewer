@@ -31,7 +31,7 @@ def fetch_orderbook(symbol):
 
 # ----------- Find nearest expiry -----------
 def get_nearest_expiry(options):
-    now_utc = datetime.now(timezone.utc)  # aware datetime
+    now_utc = datetime.now(timezone.utc)
     future_options = []
 
     for p in options:
@@ -58,7 +58,12 @@ st.title("₿ BTC Options Chain Viewer")
 products = fetch_products()
 
 # Filter BTC options only
-btc_options = [p for p in products if ("C-BTC" in p["symbol"] or "P-BTC" in p["symbol"])]
+btc_options = [
+    p for p in products
+    if p.get("product_type") == "options"
+    and p.get("underlying_asset", {}).get("symbol") == "BTC"
+    and p.get("option_type") in ("call", "put")
+]
 
 # Get nearest expiry
 expiry_str, nearest_options = get_nearest_expiry(btc_options)
@@ -75,7 +80,7 @@ else:
     data = []
     for opt in nearest_options:
         strike = opt["strike_price"]
-        opt_type = "C" if opt["option_type"] == "call" else "P"
+        opt_type = "C" if opt.get("option_type") == "call" else "P"
         mid_price = fetch_orderbook(opt["symbol"])
         data.append({"type": opt_type, "strike": strike, "mid": mid_price})
 
