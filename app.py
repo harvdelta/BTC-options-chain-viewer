@@ -1,35 +1,55 @@
 import streamlit as st
 import requests
 import pandas as pd
+import time, hmac, hashlib
 from datetime import datetime
+from urllib.parse import urlencode
 
 BASE_URL = "https://api.delta.exchange"
 
+# Load API keys from secrets
+API_KEY = st.secrets["DELTA_API_KEY"]
+API_SECRET = st.secrets["DELTA_API_SECRET"]
+
+def sign_request(method, path, params=None):
+    """Generate signed headers for Delta Exchange private API."""
+    ts = str(int(time.time()))
+    query = urlencode(params) if params else ""
+    sig_payload = f"{method.upper()}{ts}/{path}"
+    if query:
+        sig_payload += f"?{query}"
+    signature = hmac.new(API_SECRET.encode(), sig_payload.encode(), hashlib.sha256).hexdigest()
+
+    headers = {
+        "api-key": API_KEY,
+        "timestamp": ts,
+        "signature": signature
+    }
+    return headers
+
 def get_all_contracts():
-    """Fetch all option contracts from Delta Exchange."""
-    url = f"{BASE_URL}/v2/products"
-    r = requests.get(url)
+    """Fetch all option contracts (authenticated request)."""
+    path = "v2/products"
+    url = f"{BASE_URL}/{path}"
+    headers = sign_request("GET", path)
+    r = requests.get(url, headers=headers)
     r.raise_for_status()
     data = r.json()["result"]
-    return [c for c in data if c["contract_type"] == "call_option" or c["contract_type"] == "put_option"]
+    return [c for c in data if c["contract_type"] in ["call_option", "put_option"]]
 
 def get_nearest_expiry_contracts():
-    """Get nearest expiry BTC options contracts."""
     contracts = get_all_contracts()
-    # Filter only BTC options
     btc_contracts = [c for c in contracts if c["underlying_asset"]["symbol"] == "BTC"]
-    
-    # Find the nearest expiry date
     expiries = sorted(set(c["settlement_time"] for c in btc_contracts))
     nearest_expiry = expiries[0]
-
     nearest_contracts = [c for c in btc_contracts if c["settlement_time"] == nearest_expiry]
     return nearest_contracts, nearest_expiry
 
 def fetch_orderbook(product_id):
-    """Fetch orderbook for a product."""
-    url = f"{BASE_URL}/v2/l2orderbook/{product_id}"
-    r = requests.get(url)
+    path = f"v2/l2orderbook/{product_id}"
+    url = f"{BASE_URL}/{path}"
+    headers = sign_request("GET", path)
+    r = requests.get(url, headers=headers)
     r.raise_for_status()
     data = r.json()["result"]
     bid = float(data["buy_book"][0]["price"]) if data["buy_book"] else None
