@@ -81,12 +81,21 @@ def get_mid_price(ticker_data):
     if bid and ask:
         try:
             mid = (float(bid) + float(ask)) / 2
-            # Convert from Delta's price unit to USD
-            # Based on the data, prices appear to be in a smaller unit
-            # Typical conversion: divide by 100 (from cents to dollars)
-            return mid / 100
+            # Based on actual platform comparison, Delta prices need more aggressive conversion
+            # Your screenshot shows prices like $0.2-$2.0, but we were getting 1600+
+            # This suggests conversion factor should be around 1000-2000
+            return mid / 1000  # Adjust this divisor based on comparison
         except (ValueError, TypeError):
             pass
+    
+    # Fallback to mark price if bid/ask not available
+    mark_price = ticker_data.get("mark_price")
+    if mark_price:
+        try:
+            return float(mark_price) / 1000
+        except (ValueError, TypeError):
+            pass
+    
     return None
 
 def find_nearest_expiry(options):
@@ -236,7 +245,25 @@ if calls_data or puts_data:
         st.write(f"**Options for Nearest Expiry:** {len(nearest_options)}")
         st.write(f"**Last Updated:** {datetime.now(IST).strftime('%H:%M:%S IST')}")
         
-        # Debug section to see raw data
+                    # Debug section to see raw vs converted prices
+            if st.checkbox("🔧 Show price conversion debugging"):
+                st.write("**Raw API prices vs Converted:**")
+                if nearest_options and all_tickers:
+                    for i, option in enumerate(nearest_options[:5]):  # Show first 5
+                        symbol = option["symbol"]
+                        ticker_data = all_tickers.get(symbol)
+                        if ticker_data:
+                            quotes = ticker_data.get("quotes", {})
+                            raw_bid = quotes.get("best_bid", "N/A")
+                            raw_ask = quotes.get("best_ask", "N/A")
+                            raw_mark = ticker_data.get("mark_price", "N/A")
+                            
+                            converted_mid = get_mid_price(ticker_data)
+                            
+                            st.write(f"**{symbol}** (Strike: ${option['strike']:.0f})")
+                            st.write(f"  Raw: Bid={raw_bid}, Ask={raw_ask}, Mark={raw_mark}")
+                            st.write(f"  Converted Mid: ${converted_mid:.3f}" if converted_mid else "  Converted: None")
+                            st.write("---")
         if st.checkbox("🔧 Show raw data for debugging"):
             st.write("**Sample product data:**")
             if btc_options_products:
