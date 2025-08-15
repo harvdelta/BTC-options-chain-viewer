@@ -26,10 +26,10 @@ st.set_page_config(
 )
 
 class DeltaExchangeAPI:
-    def __init__(self, api_key, api_secret):
+    def __init__(self, api_key, api_secret, base_url="https://api.india.delta.exchange"):
         self.api_key = api_key
         self.api_secret = api_secret
-        self.base_url = "https://api.delta.exchange"
+        self.base_url = base_url
     
     def _generate_signature(self, method, endpoint, payload=""):
         timestamp = str(int(time.time()))
@@ -87,9 +87,9 @@ class DeltaExchangeAPI:
         return self._make_request("GET", f"/v2/tickers/{symbol}")
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def fetch_options_data(api_key, api_secret):
+def fetch_options_data(api_key, api_secret, base_url):
     """Fetch and process options data"""
-    api = DeltaExchangeAPI(api_key, api_secret)
+    api = DeltaExchangeAPI(api_key, api_secret, base_url)
     
     # Get all products
     products_response = api.get_products()
@@ -289,6 +289,7 @@ def main():
     try:
         api_key = st.secrets["delta_exchange"]["api_key"]
         api_secret = st.secrets["delta_exchange"]["api_secret"]
+        base_url = st.secrets["delta_exchange"].get("base_url", "https://api.india.delta.exchange")
         
         if not api_key or not api_secret:
             st.error("API credentials not found in secrets. Please check your Streamlit secrets configuration.")
@@ -300,15 +301,16 @@ def main():
         Please ensure your Streamlit secrets are configured with:
         ```toml
         [delta_exchange]
-        api_key = "your_api_key_here"
-        api_secret = "your_api_secret_here"
+        api_key = "LkxpWQGihtxtBUJfCGx1uSTpvyIqQl"
+        api_secret = "aG9aklujDrFK8nPZMyo6UJr6wsAyTDf3tEjM3bz5s1QtN3Cm2Q0OYqRd3cGl"
+        base_url = "https://api.india.delta.exchange"
         ```
         """)
         st.stop()
     
     # Fetch data
-    with st.spinner("Fetching options data from Delta Exchange..."):
-        all_options, underlying_groups, nearest_expiry_options = fetch_options_data(api_key, api_secret)
+    with st.spinner("Fetching options data from Delta Exchange India..."):
+        all_options, underlying_groups, nearest_expiry_options = fetch_options_data(api_key, api_secret, base_url)
     
     if not nearest_expiry_options:
         st.error("No options data available or API request failed.")
