@@ -8,14 +8,20 @@ BASE_URL = "https://api.delta.exchange"
 def get_nearest_expiry():
     url = f"{BASE_URL}/v2/products"
     data = requests.get(url).json()
+
     if not data.get("success") or "result" not in data:
         return None
-    # Filter for BTC call/put options
-    options = [
-        p for p in data["result"]
-        if p.get("contract_type") in ["call", "put"]
-        and p.get("underlying_asset", {}).get("symbol") == "BTC"
-    ]
+
+    # Filter for BTC options (calls & puts)
+    options = []
+    for p in data["result"]:
+        if p.get("contract_type") in ["call", "put"] and p.get("symbol", "").startswith("BTC"):
+            if "settlement_time" in p:
+                options.append(p)
+
+    if not options:
+        return None
+
     expiries = sorted(set([p["settlement_time"] for p in options]))
     return expiries[0] if expiries else None
 
@@ -36,8 +42,13 @@ if not expiry:
     st.stop()
 
 # Display expiry date in readable format
-expiry_dt = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
-st.write(f"**Nearest Expiry Date:** {expiry_dt.strftime('%d %b %Y, %I:%M %p %Z')}")
+try:
+    expiry_dt = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+    expiry_display = expiry_dt.strftime('%d %b %Y, %I:%M %p UTC')
+except ValueError:
+    expiry_display = expiry  # fallback if parsing fails
+
+st.write(f"**Nearest Expiry Date:** {expiry_display}")
 
 chain = fetch_options_chain(expiry)
 if not chain:
