@@ -7,57 +7,73 @@ import pytz
 # ======================
 # CONFIG
 # ======================
-BASE_URL = "https://api.delta.exchange/v2"
+# Corrected API base URL from official documentation
+BASE_URL = "https://publicapi.deltaexchange.io/v1"
 IST = pytz.timezone("Asia/Kolkata")
 
 # ======================
 # UTILS
 # ======================
-def fetch_products():
-    """Fetch all products from Delta Exchange."""
-    r = requests.get(f"{BASE_URL}/products")
-    r.raise_for_status()
-    return r.json().get("result", [])
-
-def filter_btc_options(products):
-    """Return only BTC options contracts."""
-    return [p for p in products if p.get("symbol", "").startswith(("C-BTC", "P-BTC"))]
-
-def get_nearest_expiry():
-    """Find nearest expiry and its products."""
-    products = filter_btc_options(fetch_products())
-    if not products:
-        return None, []
-    expiry_dates = sorted(set(p["settlement_time"] for p in products))
-    if not expiry_dates:
-        return None, []
-    nearest_expiry_str = expiry_dates[0]
-    nearest_expiry_dt = datetime.fromisoformat(nearest_expiry_str.replace("Z", "+00:00")).astimezone(IST)
-    nearest_expiry_products = [p for p in products if p["settlement_time"] == nearest_expiry_str]
-    return nearest_expiry_dt, nearest_expiry_products
-
-def fetch_ticker_details(symbol):
-    """Fetch bid, ask, mark price, and mid price for an option symbol."""
-    url = f"{BASE_URL}/tickers/{symbol}"
-    r = requests.get(url)
-    if r.status_code != 200:
-        return None, None, None, None
-    data = r.json().get("result", {})
-    quotes = data.get("quotes", {})
-    
-    best_bid = quotes.get("best_bid")
-    best_ask = quotes.get("best_ask")
-    mark_price = data.get("mark_price")
-    
+def fetch_market_status():
+    """Fetch market status from Delta Exchange."""
     try:
-        bid_f = float(best_bid) if best_bid is not None else None
-        ask_f = float(best_ask) if best_ask is not None else None
-        mark_f = float(mark_price) if mark_price is not None else None
-        mid_price = (bid_f + ask_f) / 2 if bid_f is not None and ask_f is not None else None
-    except ValueError:
-        return None, None, None, None
+        r = requests.get(f"{BASE_URL}/market-status")
+        r.raise_for_status()
+        return r.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error fetching market status: {e}")
+        return None
+
+def fetch_tickers():
+    """Fetch all tickers from Delta Exchange."""
+    try:
+        r = requests.get(f"{BASE_URL}/tickers")
+        r.raise_for_status()
+        return r.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error fetching tickers: {e}")
+        return None
+
+def filter_btc_options(market_data):
+    """Filter BTC options from market data."""
+    if not market_data or 'markets' not in market_data:
+        return []
     
-    return bid_f, ask_f, mark_f, mid_price
+    btc_options = []
+    for market in market_data['markets']:
+        symbol = market.get('baseMarket', '') + market.get('quoteMarket', '')
+        # Look for BTC options patterns - this might need adjustment based on actual data
+        if ('BTC' in symbol and 
+            market.get('type', '') in ['OPTIONS', 'OPTION'] or
+            'CALL' in symbol or 'PUT' in symbol or
+            'C-' in symbol or 'P-' in symbol):
+            btc_options.append(market)
+    
+    return btc_options
+
+def parse_option_symbol(symbol):
+    """Parse option symbol to extract type, strike, and expiry."""
+    # This function needs to be adjusted based on actual symbol format
+    # Common formats: BTC-25DEC20-18000-C, C-BTC-18000-25DEC20, etc.
+    try:
+        parts = symbol.split('-')
+        if len(parts) >= 4:
+            if parts[0] in ['C', 'P']:  # Call or Put prefix
+                option_type = 'CALL' if parts[0] == 'C' else 'PUT'
+                asset = parts[1]
+                strike = float(parts[2])
+                expiry = parts[3]
+            elif parts[-1] in ['C', 'P']:  # Call or Put suffix
+                asset = parts[0]
+                expiry = parts[1]
+                strike = float(parts[2])
+                option_type = 'CALL' if parts[-1] == 'C' else 'PUT'
+            else:
+                return None, None, None, None
+            return asset, option_type, strike, expiry
+    except (ValueError, IndexError):
+        pass
+    return None, None, None, None
 
 # ======================
 # STREAMLIT UI
@@ -65,28 +81,122 @@ def fetch_ticker_details(symbol):
 st.set_page_config(page_title="BTC Options Chain Viewer", layout="wide")
 st.title("₿ BTC Options Chain Viewer")
 
-expiry_datetime, products = get_nearest_expiry()
-if expiry_datetime is None or not products:
-    st.error("Could not fetch nearest expiry.")
+# Add debugging information
+st.subheader("API Status Check")
+
+# Fetch market status
+market_data = fetch_market_status()
+if market_data is None:
+    st.error("Failed to fetch market data from Delta Exchange API")
     st.stop()
 
-st.subheader(f"Nearest Expiry: {expiry_datetime.strftime('%d %b %Y %I:%M %p IST')}")
-st.caption(f"Data as of: {datetime.now(IST).strftime('%d %b %Y %I:%M:%S %p IST')}")
+# Display some debug info
+st.write(f"Total markets found: {len(market_data.get('markets', []))}")
 
+# Show sample of available markets for debugging
+if market_data.get('markets'):
+    sample_markets = market_data['markets'][:10]
+    st.write("Sample markets:")
+    for market in sample_markets:
+        st.write(f"- {market.get('baseMarket', 'N/A')}/{market.get('quoteMarket', 'N/A')} (Type: {market.get('type', 'N/A')})")
+
+# Filter BTC options
+btc_options = filter_btc_options(market_data)
+st.write(f"BTC Options found: {len(btc_options)}")
+
+if not btc_options:
+    st.warning("No BTC options found. This might be because:")
+    st.write("1. Delta Exchange might not offer BTC options through this API endpoint")
+    st.write("2. The symbol format might be different than expected")
+    st.write("3. Options might be available on a different API version")
+    
+    st.subheader("Available Markets by Type")
+    if market_data.get('markets'):
+        market_types = {}
+        for market in market_data['markets']:
+            market_type = market.get('type', 'UNKNOWN')
+            if market_type not in market_types:
+                market_types[market_type] = []
+            market_types[market_type].append(f"{market.get('baseMarket', 'N/A')}/{market.get('quoteMarket', 'N/A')}")
+        
+        for market_type, markets in market_types.items():
+            st.write(f"**{market_type}**: {len(markets)} markets")
+            if len(markets) <= 5:
+                for market in markets:
+                    st.write(f"  - {market}")
+            else:
+                for market in markets[:5]:
+                    st.write(f"  - {market}")
+                st.write(f"  ... and {len(markets) - 5} more")
+    
+    st.stop()
+
+# If we found BTC options, continue with the original logic
+st.subheader("BTC Options Processing")
+
+# Fetch ticker data
+ticker_data = fetch_tickers()
+if ticker_data is None:
+    st.error("Failed to fetch ticker data")
+    st.stop()
+
+# Process options data
 calls = []
 puts = []
 
-for p in products:
-    symbol = p["symbol"]
-    strike = float(p["strike_price"])
-    bid, ask, mark, mid = fetch_ticker_details(symbol)
-    if symbol.startswith("C-BTC"):
-        calls.append({"Strike": strike, "Call Bid": bid, "Call Ask": ask, "Call Mark": mark, "Call Mid": mid})
-    elif symbol.startswith("P-BTC"):
-        puts.append({"Strike": strike, "Put Bid": bid, "Put Ask": ask, "Put Mark": mark, "Put Mid": mid})
+for option in btc_options:
+    symbol = option.get('baseMarket', '') + option.get('quoteMarket', '')
+    asset, option_type, strike, expiry = parse_option_symbol(symbol)
+    
+    if asset != 'BTC' or strike is None:
+        continue
+    
+    # Get ticker information
+    ticker_info = ticker_data.get(symbol, {})
+    bid = ticker_info.get('buy')
+    ask = ticker_info.get('sell')
+    
+    if bid is not None and ask is not None:
+        try:
+            mid_price = (float(bid) + float(ask)) / 2
+            
+            if option_type == 'CALL':
+                calls.append({
+                    "Strike": strike,
+                    "Call Mid Price": mid_price,
+                    "Expiry": expiry,
+                    "Symbol": symbol
+                })
+            elif option_type == 'PUT':
+                puts.append({
+                    "Strike": strike,
+                    "Put Mid Price": mid_price,
+                    "Expiry": expiry,
+                    "Symbol": symbol
+                })
+        except (ValueError, TypeError):
+            continue
 
-df_calls = pd.DataFrame(calls).sort_values(by="Strike")
-df_puts = pd.DataFrame(puts).sort_values(by="Strike")
-df = pd.merge(df_calls, df_puts, on="Strike", how="outer").sort_values(by="Strike").reset_index(drop=True)
-
-st.dataframe(df, use_container_width=True)
+# Create DataFrames
+if calls or puts:
+    df_calls = pd.DataFrame(calls).sort_values(by="Strike") if calls else pd.DataFrame()
+    df_puts = pd.DataFrame(puts).sort_values(by="Strike") if puts else pd.DataFrame()
+    
+    if not df_calls.empty and not df_puts.empty:
+        df = pd.merge(df_calls[['Strike', 'Call Mid Price']], 
+                     df_puts[['Strike', 'Put Mid Price']], 
+                     on="Strike", how="outer").sort_values(by="Strike").reset_index(drop=True)
+    elif not df_calls.empty:
+        df = df_calls[['Strike', 'Call Mid Price']].sort_values(by="Strike").reset_index(drop=True)
+    else:
+        df = df_puts[['Strike', 'Put Mid Price']].sort_values(by="Strike").reset_index(drop=True)
+    
+    st.subheader("Options Chain")
+    st.dataframe(df, use_container_width=True)
+    
+    # Show raw data for debugging
+    if st.checkbox("Show raw options data"):
+        st.write("Calls:", calls)
+        st.write("Puts:", puts)
+else:
+    st.warning("No valid options data found with pricing information")
